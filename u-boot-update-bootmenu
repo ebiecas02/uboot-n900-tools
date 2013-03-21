@@ -17,34 +17,51 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+#    Modified for Alarm-N900 by Joni Lapilainen <joni.lapilainen@gmail.com>
+
+BOOTMENU_USER_CONFIG="/etc/default/u-boot-update-bootmenu"
 BOOTMENU_FAT_DIR="/home/user/MyDocs"
 BOOTMENU_CFG_DIR="/etc/bootmenu.d"
 BOOTMENU_BOOT_DIR="/boot"
-BOOTMENU_OPTBOOT_DIR="/opt/boot"
+BOOTMENU_MAEMOBOOT_DIR="$BOOTMENU_BOOT_DIR"
+BOOTMENU_OPTBOOT_DIR="$BOOTMENU_MAEMOBOOT_DIR/../home/opt/boot"
 BOOTMENU_IMG_DIR="bootmenu.img.d"
+BOOTMENU_TMP="/tmp"
 
-BOOTMENU_CMD="/var/tmp/bootmenu.cmd"
+if [ -f "$BOOTMENU_USER_CONFIG" ]; then
+	. "$BOOTMENU_USER_CONFIG"
+fi
+
 BOOTMENU_SCR="$BOOTMENU_FAT_DIR/bootmenu.scr"
+BOOTMENU_CMD="$BOOTMENU_TMP/bootmenu.cmd"
+BOOTMENU_BKP="$BOOTMENU_TMP/bootmenu.scr.bkp"
 
 INT_CARD="1"
 EXT_CARD="0"
 
 if test "$1" = "-h" || test "$1" = "--help"; then
-	echo "This script generate U-Boot Bootmenu script $BOOTMENU_SCR"
-	echo "and generate needed images in $BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR"
-	echo "Bootmenu entries are readed from config files stored in $BOOTMENU_CFG_DIR"
+	echo "This script generates U-Boot Bootmenu script $BOOTMENU_SCR"
+	echo "and needed images in $BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR"
+	echo "Bootmenu entries are read from config files stored in $BOOTMENU_CFG_DIR"
 	echo
-	echo "You need to run this script every time when you install/uninstall"
-	echo "kernel images in $BOOTMENU_BOOT_DIR or $BOOTMENU_OPTBOOT_DIR or"
-	echo "when bootmenu config files in $BOOTMENU_CFG_DIR are changed"
+	echo "You need to run this script every time you install or uninstall"
+	echo "kernel images in $BOOTMENU_BOOT_DIR, $BOOTMENU_OPTBOOT_DIR, $BOOTMENU_MAEMOBOOT_DIR"
+	echo "or when bootmenu config files in $BOOTMENU_CFG_DIR are changed"
 	echo
-	echo "To run this script, first eMMC FAT paritition must be mounted to"
+	echo "To run this script, first eMMC FAT partition must be mounted to"
 	echo "$BOOTMENU_FAT_DIR"
+	echo
+	echo "Custom paths can be defined in $BOOTMENU_USER_CONFIG"
 	echo
 	echo "Author: Pali Rohár <pali.rohar@gmail.com>"
 	echo "License: GNU GPL v3"
 	exit 1
 fi
+
+imgdrestore() {
+	rm -rf "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR"
+	mv "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR.bkp" "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR"
+}
 
 if ! mount | grep -q "$BOOTMENU_FAT_DIR"; then
 	echo "First eMMC partition $BOOTMENU_FAT_DIR is not mounted!"
@@ -59,8 +76,9 @@ fi
 rm -f "$BOOTMENU_CMD"
 rm -f "$BOOTMENU_CMD.new"
 rm -f "$BOOTMENU_CMD.default"
-rm -f "$BOOTMENU_SCR"
-rm -rf "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR"
+rm -f "$BOOTMENU_BKP"
+rm -rf "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR.bkp"
+mv "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR" "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR.bkp"
 mkdir -p "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR"
 
 count=0
@@ -96,7 +114,11 @@ count=$(($count+1))
 
 for file in $BOOTMENU_CFG_DIR/*.item; do
 
-	if ! test -f "$file"; then continue; fi
+	if ! test -f "$file"; then
+		imgdrestore
+		echo "Error: No menuitems found!"
+		exit 1
+	fi
 
 	echo
 	echo "Configuration file: $file"
@@ -108,8 +130,8 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 	ITEM_INITRD=""
 	ITEM_SCRIPT=""
 	ITEM_CMDLINE=""
-	ITEM_USEATAG="" # Obsolated
-	ITEM_REUSEATAGS="" # Obsolated
+	ITEM_USEATAG="" # Obsoleted
+	ITEM_REUSEATAGS="" # Obsoleted
 	ITEM_OMAPATAG=""
 	. $file
 	mmcnum=""
@@ -120,12 +142,12 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 	mmcscriptfile=""
 
 	if test -z "$ITEM_NAME"; then
-		echo "Error: Invalid file - missing name"
+		echo "Warning: Invalid file - missing name. Skipping.."
 		continue
 	fi
 
 	if test -z "$ITEM_KERNEL" && test -z "$ITEM_SCRIPT"; then
-		echo "Error: Invalid file - missing kernel or script file"
+		echo "Warning: Invalid file - missing kernel or script file. Skipping.."
 		continue
 	fi
 
@@ -137,7 +159,7 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 		kernel_path=""
 		initrd_path=""
 
-		if test -f "$BOOTMENU_BOOT_DIR/zImage-$ITEM_KERNEL" || test -f "$BOOTMENU_OPTBOOT_DIR/zImage-$ITEM_KERNEL"; then
+		if test -f "$BOOTMENU_BOOT_DIR/zImage-$ITEM_KERNEL" || test -f "$BOOTMENU_OPTBOOT_DIR/zImage-$ITEM_KERNEL" || test -f "$BOOTMENU_MAEMOBOOT_DIR/zImage-$ITEM_KERNEL"; then
 			ITEM_KERNEL="zImage-$ITEM_KERNEL"
 		fi
 
@@ -145,9 +167,12 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 			kernel_path="$BOOTMENU_BOOT_DIR/$ITEM_KERNEL"
 		elif test -f "$BOOTMENU_OPTBOOT_DIR/$ITEM_KERNEL"; then
 			kernel_path="$BOOTMENU_OPTBOOT_DIR/$ITEM_KERNEL"
+		elif test -f "$BOOTMENU_MAEMOBOOT_DIR/$ITEM_KERNEL"; then
+			kernel_path="$BOOTMENU_MAEMOBOOT_DIR/$ITEM_KERNEL"
 		else
-			echo "Error: Kernel image '$ITEM_KERNEL' was not found in $BOOTMENU_BOOT_DIR or $BOOTMENU_OPTBOOT_DIR" >&2
-			continue
+			imgdrestore
+			echo "Error: Kernel image '$ITEM_KERNEL' was not found in $BOOTMENU_BOOT_DIR, $BOOTMENU_OPTBOOT_DIR or $BOOTMENU_MAEMOBOOT_DIR" >&2
+			exit 1
 		fi
 
 		mmcnum="$INT_CARD"
@@ -161,8 +186,9 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 			mkimage -A arm -O linux -T kernel -C none -a 80008000 -e 80008000 -n "$ITEM_KERNEL" -d "$kernel_path" "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR/$ITEM_KERNEL" >/dev/null
 
 			if test "$?" != "0"; then
+				imgdrestore
 				echo "Error: Generating u-boot image for kernel '$ITEM_KERNEL' failed" >&2
-				continue
+				exit 1
 			fi
 
 		fi
@@ -179,9 +205,12 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 				initrd_path="$BOOTMENU_BOOT_DIR/$ITEM_INITRD"
 			elif test -f "$BOOTMENU_OPTBOOT_DIR/$ITEM_INITRD"; then
 				initrd_path="$BOOTMENU_OPTBOOT_DIR/$ITEM_INITRD"
+			elif test -f "$BOOTMENU_MAEMOBOOT_DIR/$ITEM_INITRD"; then
+				initrd_path="$BOOTMENU_MAEMOBOOT_DIR/$ITEM_INITRD"
 			else
+				imgdrestore
 				echo "Error: Initrd image '$ITEM_INITRD' was not found in $BOOTMENU_BOOT_DIR or $BOOTMENU_OPTBOOT_DIR" >&2
-				continue
+				exit 1
 			fi
 
 			mmcinitrdfile="$BOOTMENU_IMG_DIR/$ITEM_INITRD"
@@ -192,8 +221,9 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 				mkimage -A arm -O linux -T ramdisk -C none -a 0 -e 0 -n "$ITEM_INITRD" -d "$initrd_path" "$BOOTMENU_FAT_DIR/$BOOTMENU_IMG_DIR/$ITEM_INITRD" >/dev/null
 
 				if test "$?" != "0"; then
+					imgdrestore
 					echo "Error: Generating u-boot image for initrd '$ITEM_INITRD' failed" >&2
-					continue
+					exit 1
 				fi
 
 			fi
@@ -207,8 +237,9 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 		mmcpart="$(echo ${ITEM_DEVICE}p1 | cut -f2 -dp)" # HACK: if ITEM_DEVICE has no part first is selected
 
 		if test -z "$mmcnum" || test -z "$mmcpart"; then
+			imgdrestore
 			echo "Error: Incorrect device '$ITEM_DEVICE'" >&2
-			continue
+			exit 1
 		fi
 
 		if test "$ITEM_FSTYPE" = "fat" || test "$ITEM_FSTYPE" = "vfat"; then
@@ -218,8 +249,9 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 		elif test "$ITEM_FSTYPE" = "ext4"; then
 			mmctype="ext4"
 		else
+			imgdrestore
 			echo "Error: Unknown filesystem '$ITEM_FSTYPE'" >&2
-			continue
+			exit 1
 		fi
 
 		if ! test -z "$ITEM_SCRIPT"; then
@@ -234,12 +266,12 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 	fi
 
 	if ! test -z "$ITEM_USEATAG"; then
-		echo "Warning: Item file has obsolated option ITEM_USEATAG. Change it to ITEM_OMAPATAG"
+		echo "Warning: Item file has obsoleted option ITEM_USEATAG. Change it to ITEM_OMAPATAG"
 		ITEM_OMAPATAG=$ITEM_USEATAG
 	fi
 
 	if ! test -z "$ITEM_REUSEATAGS"; then
-		echo "Warning: Item file has obsolated option ITEM_REUSEATAGS. Change it to ITEM_OMAPATAG"
+		echo "Warning: Item file has obsoleted option ITEM_REUSEATAGS. Change it to ITEM_OMAPATAG"
 		ITEM_OMAPATAG=$ITEM_REUSEATAGS
 	fi
 
@@ -280,7 +312,9 @@ for file in $BOOTMENU_CFG_DIR/*.item; do
 		printf "setenv mmcscriptfile;" >> "$BOOTMENU_CMD.new"
 		printf "run trymmckernboot;" >> "$BOOTMENU_CMD.new"
 	else
+		imgdrestore
 		echo "Error: Unknown action" >&2
+		exit 1
 	fi
 
 	printf "';" >> "$BOOTMENU_CMD.new"
@@ -314,9 +348,12 @@ fi
 
 echo
 echo "Generating u-boot bootmenu script..."
+mv "$BOOTMENU_SCR" "$BOOTMENU_BKP"
 mkimage -A arm -O linux -T script -C none -a 0 -e 0 -n bootmenu -d "$BOOTMENU_CMD" "$BOOTMENU_SCR" >/dev/null
 
 if test "$?" != "0"; then
+	imgdrestore
+	mv "$BOOTMENU_BKP" "$BOOTMENU_SCR"
 	echo "Error: Generating u-boot bootmenu script failed" >&2
 	exit 1
 fi
@@ -324,3 +361,4 @@ fi
 rm -f "$BOOTMENU_CMD"
 rm -f "$BOOTMENU_CMD.new"
 rm -f "$BOOTMENU_CMD.default"
+rm -f "$BOOTMENU_BKP"
