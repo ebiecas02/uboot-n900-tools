@@ -1,0 +1,7 @@
+post_install() {
+  echo
+  echo ">>> Read and edit /etc/default/u-boot-update-bootmenu before trying anything!"
+  echo
+}
+
+# vim:set ts=2 sw=2 et:
